@@ -173,6 +173,111 @@ mii_fdt_get_contype(phandle_t macnode)
 	return (mii_fdt_contype_from_name(val));
 }
 
+int
+mii_fdt_get_fixed_link(phandle_t macnode, struct mii_fixed_link *fl)
+{
+	pcell_t cells[5];
+	phandle_t node;
+	ssize_t len;
+
+	bzero(fl, sizeof(*fl));
+
+	node = ofw_bus_find_child(macnode, "fixed-link");
+	if (node != 0) {
+		if (OF_getencprop(node, "speed", &cells[0],
+		    sizeof(cells[0])) <= 0)
+			return (EINVAL);
+		fl->fl_speed = cells[0];
+		fl->fl_fdx = OF_hasprop(node, "full-duplex") != 0;
+		fl->fl_pause = OF_hasprop(node, "pause") != 0;
+		fl->fl_asym_pause = OF_hasprop(node, "asym-pause") != 0;
+		return (0);
+	}
+
+	/*
+	 * Deprecated property form:
+	 *	fixed-link = <phy_id duplex speed pause asym_pause>
+	 * Note that duplex comes before speed.
+	 */
+	len = OF_getencprop(macnode, "fixed-link", cells, sizeof(cells));
+	if (len <= 0)
+		return (ENOENT);
+	if (len != (ssize_t)sizeof(cells))
+		return (EINVAL);
+	fl->fl_legacy = true;
+	fl->fl_fdx = cells[1] != 0;
+	fl->fl_speed = cells[2];
+	fl->fl_pause = cells[3] != 0;
+	fl->fl_asym_pause = cells[4] != 0;
+
+	return (0);
+}
+
+int
+mii_fdt_fixed_link_media(const struct mii_fixed_link *fl, u_int *mediap)
+{
+	u_int subtype;
+
+	switch (fl->fl_speed) {
+	case 10:
+		subtype = IFM_10_T;
+		break;
+	case 100:
+		subtype = IFM_100_TX;
+		break;
+	case 1000:
+		subtype = IFM_1000_T;
+		break;
+	case 2500:
+		subtype = IFM_2500_T;
+		break;
+	case 5000:
+		subtype = IFM_5000_T;
+		break;
+	case 10000:
+		subtype = IFM_10G_T;
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	/*
+	 * Half duplex is the binding's default.  "pause" and "asym-pause"
+	 * are deliberately not folded into the media word: flow control on
+	 * a fixed link is a MAC policy, and callers that want them can read
+	 * them from the parsed binding.
+	 */
+	*mediap = IFM_ETHER | subtype | (fl->fl_fdx ? IFM_FDX : IFM_HDX);
+
+	return (0);
+}
+
+int
+mii_fdt_attach_fixed(device_t dev, device_t *miibus, if_t ifp,
+    ifm_change_cb_t ifmedia_upd, ifm_stat_cb_t ifmedia_sts, int flags)
+{
+	struct mii_fixed_link fl;
+	phandle_t node;
+	u_int media;
+	int error;
+
+	node = ofw_bus_get_node(dev);
+	if (node == 0 || node == (phandle_t)-1)
+		return (ENOENT);
+	error = mii_fdt_get_fixed_link(node, &fl);
+	if (error != 0)
+		return (error);
+	error = mii_fdt_fixed_link_media(&fl, &media);
+	if (error != 0) {
+		device_printf(dev, "unsupported fixed-link speed %u\n",
+		    fl.fl_speed);
+		return (error);
+	}
+
+	return (mii_attach_fixed(dev, miibus, ifp, ifmedia_upd, ifmedia_sts,
+	    media, flags));
+}
+
 void
 mii_fdt_free_config(struct mii_fdt_phy_config *cfg)
 {
@@ -270,6 +375,9 @@ miibus_fdt_attach(device_t dev)
 	for (i = 0; i < nchildren; i++) {
 		ma = device_get_ivars(children[i]);
 		bzero(&ma->obd, sizeof(ma->obd));
+		resource_list_init(&ma->rl);
+		if (ma->mii_fixed_media != 0)
+			continue;	/* Synthetic fixed-link PHY. */
 		phy_node = mii_fdt_lookup_phy(ofw_bus_get_node(parent),
 		    ma->mii_phyno);
 		if (phy_node == -1) {
@@ -290,7 +398,6 @@ miibus_fdt_attach(device_t dev)
 		 * Only a handful of PHYs support those,
 		 * so it's fine if we fail here.
 		 */
-		resource_list_init(&ma->rl);
 		(void)ofw_bus_intr_to_rl(children[i], phy_node, &ma->rl, NULL);
 	}
 

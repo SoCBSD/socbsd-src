@@ -341,7 +341,16 @@ mdioproxy_probe(device_t dev)
 {
 	device_set_desc(dev, "MII/MDIO proxy, MDIO side");
 
-	return (BUS_PROBE_SPECIFIC);
+	/*
+	 * This device only ever exists because mdioproxy_identify() or a
+	 * hint created it by name, so it always carries DF_FIXEDCLASS.
+	 * Bid NOWILDCARD rather than SPECIFIC: mdio(4) also enumerates
+	 * nameless children from the device tree and device_probe_child()
+	 * offers those to every driver in the mdio devclass, where a bid of
+	 * BUS_PROBE_SPECIFIC - which is 0 - counts as an exact match and
+	 * would steal them from the driver that actually matches.
+	 */
+	return (BUS_PROBE_NOWILDCARD);
 }
 
 static int

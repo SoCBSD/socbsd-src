@@ -306,7 +306,7 @@ dev/dwc/if_dwc_socfpga.c			optional fdt dwc_socfpga
 dev/enetc/enetc_mdio.c				optional enetc soc_nxp_ls
 dev/enetc/if_enetc.c				optional enetc iflib pci fdt soc_nxp_ls
 
-dev/eqos/if_eqos.c				optional eqos
+dev/eqos/if_eqos.c				optional eqos mdio
 dev/eqos/if_eqos_if.m				optional eqos
 dev/eqos/if_eqos_fdt.c				optional eqos fdt
 

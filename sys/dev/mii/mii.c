@@ -262,7 +262,7 @@ miibus_hinted_child(device_t dev, const char *name, int unit)
 	 */
 	if (ma == NULL) {
 		ma = malloc(sizeof(struct mii_attach_args), M_DEVBUF,
-		    M_NOWAIT);
+		    M_NOWAIT | M_ZERO);
 		if (ma == NULL)
 			return;
 		phy = device_add_child(dev, name, unit);
@@ -431,6 +431,7 @@ mii_attach(device_t dev, device_t *miibus, if_t ifp,
 	}
 
 	ma.mii_capmask = capmask;
+	ma.mii_fixed_media = 0;
 
 	if (resource_int_value(device_get_name(*miibus),
 	    device_get_unit(*miibus), "phymask", &phymask) != 0)
@@ -536,6 +537,102 @@ mii_attach(device_t dev, device_t *miibus, if_t ifp,
 	free(ivars, M_DEVBUF);
 	if (first != 0)
 		*miibus = NULL;
+	return (rv);
+}
+
+/*
+ * Helper function used by network interface drivers whose link partner
+ * cannot be reached over MDIO at all: fixed links, MAC to MAC connections,
+ * the CPU port of an ethernet switch, media converters and so on.  A single
+ * synthetic PHY is created and handed to fixedphy(4).  No MII register is
+ * ever read or written, so the caller does not need working MIIBUS_READREG()
+ * and MIIBUS_WRITEREG() methods, but everything else - media handling, the
+ * MIIBUS_STATCHG() callback and the link state reported to the stack - works
+ * as it does with a real PHY.
+ *
+ * "media" is a complete IFM_ETHER media word, e.g.
+ *	IFM_ETHER | IFM_1000_T | IFM_FDX
+ */
+int
+mii_attach_fixed(device_t dev, device_t *miibus, if_t ifp,
+    ifm_change_cb_t ifmedia_upd, ifm_stat_cb_t ifmedia_sts, u_int media,
+    int flags)
+{
+	struct miibus_ivars *ivars;
+	struct mii_attach_args *args;
+	device_t phy;
+	int rv;
+
+	bus_topo_assert();
+
+	if (IFM_TYPE(media) != IFM_ETHER || IFM_SUBTYPE(media) == 0) {
+		printf("%s: invalid media 0x%08x\n", __func__, media);
+		return (EINVAL);
+	}
+
+	/*
+	 * A fixed link is the only "PHY" on its bus; there is nothing to
+	 * scan and nothing to add on a second call.
+	 */
+	if (*miibus != NULL)
+		return (EBUSY);
+
+	ivars = malloc(sizeof(*ivars), M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (ivars == NULL)
+		return (ENOMEM);
+	ivars->ifp = ifp;
+	ivars->ifmedia_upd = ifmedia_upd;
+	ivars->ifmedia_sts = ifmedia_sts;
+	ivars->mii_flags = flags;
+
+	*miibus = device_add_child(dev, "miibus", DEVICE_UNIT_ANY);
+	if (*miibus == NULL) {
+		rv = ENXIO;
+		goto fail;
+	}
+	device_set_ivars(*miibus, ivars);
+
+	rv = device_set_driver(*miibus, &miibus_driver);
+	if (rv != 0)
+		goto fail;
+
+	args = malloc(sizeof(*args), M_DEVBUF, M_NOWAIT | M_ZERO);
+	if (args == NULL) {
+		rv = ENOMEM;
+		goto fail;
+	}
+	/*
+	 * Assignment of mii_data is done in miibus_attach(), i.e. once the
+	 * miibus softc has been allocated.  The ID registers stay zero,
+	 * which is what a braindead PHY reports anyway.
+	 */
+	args->mii_capmask = BMSR_DEFCAPMASK;
+	args->mii_fixed_media = media;
+
+	/*
+	 * Name the child explicitly.  device_add_child() then sets
+	 * DF_FIXEDCLASS, so the device is offered to fixedphy(4) only and
+	 * ukphy(4), which matches anything, never sees it.
+	 */
+	phy = device_add_child(*miibus, "fixedphy", DEVICE_UNIT_ANY);
+	if (phy == NULL) {
+		free(args, M_DEVBUF);
+		rv = ENXIO;
+		goto fail;
+	}
+	device_set_ivars(phy, args);
+
+	/* Attaching of the PHY driver is done in miibus_attach(). */
+	bus_attach_children(dev);
+
+	return (0);
+
+ fail:
+	if (*miibus != NULL) {
+		device_delete_child(dev, *miibus);
+		*miibus = NULL;
+	}
+	free(ivars, M_DEVBUF);
 	return (rv);
 }
 

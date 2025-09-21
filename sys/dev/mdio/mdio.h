@@ -31,4 +31,13 @@ extern driver_t mdio_driver;
 
 #define	MDIO_DEVADDR_NONE	-1	/**< Use clause 22 register access */
 
+enum mdio_device_ivars {
+	MDIO_IVAR_PHY = BUS_IVARS_PRIVATE	/**< MDIO address ("reg") */
+};
+
+#define	MDIO_ACCESSOR(var, ivar, type)					\
+	__BUS_ACCESSOR(mdio, var, MDIO, ivar, type)
+
+MDIO_ACCESSOR(phy, PHY, uint32_t)
+
 #endif	/* __DEV_MDIO_MDIO_H__ */

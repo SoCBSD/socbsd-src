@@ -8,7 +8,7 @@ SRCS+=	miibus_if.c mii.c mii_bitbang.c mii_physubr.c
 SRCS+=	nsgphy.c nsphy.c nsphyter.c pnaphy.c qsphy.c
 SRCS+=	rdcphy.c rgephy.c rlphy.c smcphy.c
 SRCS+=	smscphy.c tdkphy.c truephy.c
-SRCS+=	ukphy.c ukphy_subr.c
+SRCS+=	fixedphy.c ukphy.c ukphy_subr.c
 SRCS+=	vscphy.c xmphy.c
 SRCS+=	bus_if.h device_if.h miibus_if.h miidevs.h opt_platform.h pci_if.h
 
