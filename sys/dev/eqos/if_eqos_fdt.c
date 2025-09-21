@@ -58,6 +58,7 @@
 #include <dev/eqos/if_eqos_var.h>
 
 #include "if_eqos_if.h"
+#include "ofw_bus_if.h"
 #include "syscon_if.h"
 #include "gpio_if.h"
 #include "rk_otp_if.h"
@@ -88,6 +89,64 @@ static const struct ofw_compat_data compat_data[] = {
 	{ NULL, 0 }
 };
 
+struct eqos_fdt_softc {
+	struct eqos_softc		base;
+	clk_t				clk_mac_speed;
+};
+
+/*
+ * The RGMII transmit clock has to follow the negotiated speed.  It is a
+ * mux picking one of the divided taps off the MAC clock, so ask for the
+ * frequency and let the clock code reparent it.
+ */
+static int
+eqos_fdt_set_speed(device_t dev, int speed)
+{
+	struct eqos_fdt_softc *sc = device_get_softc(dev);
+	uint64_t actual, freq;
+	int error;
+
+	if (sc->clk_mac_speed == NULL)
+		return (0);
+
+	switch (speed) {
+	case IFM_1000_T:
+	case IFM_1000_SX:
+		freq = 125000000;
+		break;
+	case IFM_100_TX:
+		freq = 25000000;
+		break;
+	case IFM_10_T:
+		freq = 2500000;
+		break;
+	default:
+		device_printf(dev, "unsupported media %u\n", speed);
+		return (EINVAL);
+	}
+
+	error = clk_set_freq(sc->clk_mac_speed, freq, 0);
+	if (error != 0) {
+		device_printf(dev, "cannot set %s to %ju Hz\n",
+		    clk_get_name(sc->clk_mac_speed), (uintmax_t)freq);
+		return (error);
+	}
+
+	/*
+	 * Setting the frequency of a mux only picks a parent, so it can
+	 * report success and still leave the clock somewhere else.  Say so
+	 * rather than run at a speed neither end of the link expects.
+	 */
+	if (clk_get_freq(sc->clk_mac_speed, &actual) == 0 && actual != freq)
+		device_printf(dev, "%s runs at %ju Hz, expected %ju Hz\n",
+		    clk_get_name(sc->clk_mac_speed), (uintmax_t)actual,
+		    (uintmax_t)freq);
+	else if (bootverbose)
+		device_printf(dev, "%s set to %ju Hz\n",
+		    clk_get_name(sc->clk_mac_speed), (uintmax_t)freq);
+
+	return (0);
+}
 
 static int
 eqos_phy_reset(device_t dev)
@@ -140,10 +199,32 @@ eqos_phy_reset(device_t dev)
 	return (0);
 }
 
+/*
+ * The MDIO bus is a subnode of the MAC in the snps,dwmac binding.
+ */
+static phandle_t
+eqos_fdt_mdio_node(device_t dev)
+{
+	phandle_t child, node;
+
+	node = ofw_bus_get_node(dev);
+	if (node == 0 || node == (phandle_t)-1)
+		return (0);
+	for (child = OF_child(node); child != 0; child = OF_peer(child)) {
+		if (!ofw_bus_node_status_okay(child))
+			continue;
+		if (ofw_bus_node_is_compatible(child, "snps,dwmac-mdio"))
+			return (child);
+	}
+
+	return (0);
+}
+
 static int
 eqos_fdt_init(device_t dev)
 {
-	struct eqos_softc *sc = device_get_softc(dev);
+	struct eqos_fdt_softc *fsc = device_get_softc(dev);
+	struct eqos_softc *sc = &fsc->base;
 	phandle_t node = ofw_bus_get_node(dev);
 	hwreset_t eqos_reset;
 	regulator_t eqos_supply;
@@ -212,6 +293,12 @@ eqos_fdt_init(device_t dev)
 		mac_clk_tx = NULL;
 	}
 
+	if (clk_get_by_ofw_name(dev, 0, "clk_mac_speed",
+	    &fsc->clk_mac_speed) != 0) {
+		device_printf(dev, "could not get clk_mac_speed clock\n");
+		fsc->clk_mac_speed = NULL;
+	}
+
 	if (clk_get_by_ofw_name(dev, 0, "aclk_mac", &aclk_mac) != 0) {
 		device_printf(dev, "could not get aclk_mac clock\n");
 		aclk_mac = NULL;
@@ -256,6 +343,8 @@ eqos_fdt_init(device_t dev)
 	if (eqos_phy_reset(dev))
 		return (ENXIO);
 
+	sc->mdio_node = eqos_fdt_mdio_node(dev);
+
 	if (eqos_reset)
 		hwreset_deassert(eqos_reset);
 
@@ -289,19 +378,41 @@ eqos_fdt_probe(device_t dev)
 	return (BUS_PROBE_DEFAULT);
 }
 
+/*
+ * Hand the MDIO bus subnode down to the mdio(4) child, so that it can
+ * enumerate the devices on the bus from the device tree.  Matching is done
+ * on the compatible string rather than the node name, because the FDT
+ * backend synthesises "name" with the unit address included.
+ */
+static phandle_t
+eqos_fdt_get_node(device_t bus, device_t dev)
+{
+	struct eqos_softc *sc;
+
+	sc = device_get_softc(bus);
+	if (sc->mdio_node != 0 && strcmp(device_get_name(dev), "mdio") == 0)
+		return (sc->mdio_node);
+
+	return ((phandle_t)-1);
+}
 
 static device_method_t eqos_fdt_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		eqos_fdt_probe),
 
+	/* ofw_bus interface */
+	DEVMETHOD(ofw_bus_get_node,	eqos_fdt_get_node),
+
 	/* EQOS interface */
 	DEVMETHOD(if_eqos_init,		eqos_fdt_init),
+	DEVMETHOD(if_eqos_set_speed,	eqos_fdt_set_speed),
 
 	DEVMETHOD_END
 };
 
 DEFINE_CLASS_1(eqos, eqos_fdt_driver, eqos_fdt_methods,
-    sizeof(struct eqos_softc), eqos_driver);
+    sizeof(struct eqos_fdt_softc), eqos_driver);
 DRIVER_MODULE(eqos, simplebus, eqos_fdt_driver, 0, 0);
 MODULE_DEPEND(eqos, ether, 1, 1, 1);
 MODULE_DEPEND(eqos, miibus, 1, 1, 1);
+MODULE_DEPEND(eqos, mdio, 1, 1, 1);

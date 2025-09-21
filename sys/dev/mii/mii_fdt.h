@@ -70,4 +70,34 @@ mii_contype_t mii_fdt_get_contype(phandle_t macnode);
 void mii_fdt_free_config(struct mii_fdt_phy_config *cfg);
 mii_fdt_phy_config_t *mii_fdt_get_config(device_t phydev);
 
+/*
+ * A parsed "fixed-link" binding.  Both the subnode form and the deprecated
+ * five cell property form are represented here.
+ */
+struct mii_fixed_link {
+	u_int	fl_speed;	/* Mbit/s: 10, 100, 1000, 2500, 5000, 10000 */
+	bool	fl_fdx;		/* "full-duplex" present */
+	bool	fl_pause;	/* "pause" present */
+	bool	fl_asym_pause;	/* "asym-pause" present */
+	bool	fl_legacy;	/* came from the property form */
+};
+
+/*
+ * Parse the "fixed-link" binding of a MAC node.  Returns 0 on success,
+ * ENOENT if the node has no fixed link at all, EINVAL if it has a malformed
+ * one.
+ */
+int mii_fdt_get_fixed_link(phandle_t macnode, struct mii_fixed_link *fl);
+
+/* Convert a parsed fixed link to an IFM_ETHER media word. */
+int mii_fdt_fixed_link_media(const struct mii_fixed_link *fl, u_int *mediap);
+
+/*
+ * Attach a fixed PHY described by the "fixed-link" binding of the given
+ * device.  Returns ENOENT if there is no fixed link, in which case the
+ * caller should fall back to mii_attach().
+ */
+int mii_fdt_attach_fixed(device_t dev, device_t *miibus, if_t ifp,
+    ifm_change_cb_t ifmedia_upd, ifm_stat_cb_t ifmedia_sts, int flags);
+
 #endif

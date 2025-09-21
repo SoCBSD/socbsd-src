@@ -212,6 +212,7 @@ struct mii_attach_args {
 	uint32_t mii_id1;		/* PHY ID register 1 */
 	uint32_t mii_id2;		/* PHY ID register 2 */
 	u_int mii_capmask;		/* capability mask for BMSR */
+	u_int mii_fixed_media;		/* fixed-link media word, or 0 */
 #ifdef FDT
 	struct ofw_bus_devinfo obd;
 	struct resource_list rl;
@@ -270,6 +271,8 @@ DECLARE_CLASS(miibus_fdt_driver);
 
 int	mii_attach(device_t, device_t *, if_t, ifm_change_cb_t,
 	    ifm_stat_cb_t, int, int, int, int);
+int	mii_attach_fixed(device_t, device_t *, if_t, ifm_change_cb_t,
+	    ifm_stat_cb_t, u_int, int);
 int	mii_mediachg(struct mii_data *);
 void	mii_tick(struct mii_data *);
 void	mii_pollstat(struct mii_data *);

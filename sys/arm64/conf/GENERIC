@@ -23,8 +23,16 @@ ident		GENERIC
 include		"std.arm64"
 include		"std.dev"
 
-makeoptions	WITH_KERNEL_BIN=1
+# build options
+makeoptions 	WITH_KERNEL_BIN=1
 options 	BOOTVERBOSE
+options 	ROOTDEVNAME=\"ufs:mmcsd0p3\"
+
+# tuning eth/switch
+envvar 		net.isr.maxthreads="-1"
+envvar		net.isr.bindthreads="1"
+envvar		net.isr.dispatch="deferred"
+envvar		net.isr.defaultqlimit="4096"
 
 # Include SoC specific configuration
 include		"std.al"
